@@ -1,6 +1,7 @@
 import {
   getOrCreateAssociatedTokenAccount,
   getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 
 import {
@@ -24,6 +25,8 @@ import base58 from "bs58";
 import { Connection, Keypair, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import { NodeHttpTransport } from "@improbable-eng/grpc-web-node-http-transport";
 import hre, { ethers } from "hardhat";
+import { formatUnits } from "ethers/lib/utils";
+import { BigNumber, Contract, Signer } from "ethers";
 
 setDefaultWasm("node"); // needed while in node environment
 
@@ -43,6 +46,31 @@ const ETH_TOKEN_ADDRESS = "0x604b799687e94D6CE7b3C8D1a6575bF05cA608ef";
 const WORMHOLE_RPC_HOSTS = ["https://wormhole-v2-testnet-api.certus.one"];
 
 const SOLANA_RPC = clusterApiUrl("devnet");
+
+async function displayBalance(rowdyToken: Contract, signer: Signer, DECIMALS: BigNumber, connection: Connection, keypair: Keypair, mintAccount: string) {
+  const initialERC20Balance = await rowdyToken.balanceOf(await signer.getAddress())
+  const initialERC20Formatted = formatUnits(
+    initialERC20Balance,
+    DECIMALS
+  )
+  console.log("ERC20 balance:", initialERC20Formatted);
+  let initialSolanaBalance = 0;
+  const results = await connection.getParsedTokenAccountsByOwner(
+    keypair.publicKey,
+    {
+      programId: TOKEN_PROGRAM_ID
+    }
+  )
+  for (const item of results.value) {
+    const tokenInfo = item.account.data.parsed.info;
+    const address = tokenInfo.mint;
+    const amount = tokenInfo.tokenAmount.uiAmount;
+    if (address === mintAccount) {
+      initialSolanaBalance = amount;
+    }
+  }
+  console.log("Wrapped ERC20 Solana balance:", initialSolanaBalance);
+}
 
 /**
  * Attest the ERC token to the WormHole Network
@@ -113,8 +141,8 @@ async function attest() {
  */
 async function transfer() {
   console.log("Transferring ERC token to Solana...");
-  const rowdyContract = await ethers.getContract("RowdyToken");
-  const DECIMALS = await rowdyContract.decimals();
+  const rowdyToken = await ethers.getContract("RowdyToken");
+  const DECIMALS = await rowdyToken.decimals();
   const connection = new Connection(SOLANA_RPC, "confirmed");
   const keypair = Keypair.fromSecretKey(
     base58.decode(process.env.SOLANA_PRIVATE_KEY as string)
@@ -142,7 +170,7 @@ async function transfer() {
   );
   const signer = (await ethers.getSigners())[0];
   const transferAmount = ethers.utils.parseUnits("1", DECIMALS);
-  console.log("Approve the bridge to spend the tokens...");
+  console.log("Approving the bridge to spend the tokens...");
   // approve the bridge to spend Rowdy Tokens
   await approveEth(
     ETH_TOKEN_BRIDGE_ADDRESS,
@@ -150,6 +178,7 @@ async function transfer() {
     signer,
     transferAmount
   );
+  displayBalance(rowdyToken, signer, DECIMALS, connection, keypair, solanaMintKey.toString());
   console.log("Transferring the tokens...");
   // transfer tokens
   const receipt = await transferFromEth(
@@ -197,6 +226,7 @@ async function transfer() {
   transaction.partialSign(keypair);
   const txId = await connection.sendRawTransaction(transaction.serialize());
   await connection.confirmTransaction(txId);
+  displayBalance(rowdyToken, signer, DECIMALS, connection, keypair, solanaMintKey.toString());
   console.log("Transfer complete! 🎉");
 }
 
